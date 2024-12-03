@@ -8,7 +8,8 @@ setup(
     install_requires=[
         'seleniumbase',
         'selenium-wire',
-        'selenium'
+        'selenium',
+        'blinker==1.7.0'
     ],
     author='Karim Dabbouz',
     author_email='hey@karim.ooo',
