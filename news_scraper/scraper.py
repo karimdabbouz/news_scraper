@@ -13,7 +13,7 @@ class ArticleLinkScraper():
     A flexible scraper to parse links for news articles from any news outlet.
 
     :param str scraping_mode: Determines how links should be parsed from the site. Options: 'RSS', 'FRONTEND' or 'API'
-    :param dict selenium_settings: Determines what kind of driver and how it is started. Default: mode=uc, headed=True, proxy=None
+    :param dict selenium_settings: Determines what kind of driver to use and how it is started. Default: mode=uc, headed=True, proxy=None
     :param [str] urls: The URLs to parse links from. Needs to be a list, even for RSS feeds where only the first entry is parsed
     :param str/lambda article_url_selector: The XPATH selector to access the article links or a lambda expression that takes a JSON and returns a list of links, i.e.
     lambda response: [x['url'] for x in response['docs']]
@@ -34,30 +34,6 @@ class ArticleLinkScraper():
         self.urls=urls
         self.article_url_selector=article_url_selector
         
-
-    def create_selenium_driver(self):
-        '''
-        Starts Selenium using SeleniumBase and returns the driver.
-        Note: SeleniumBase's wire-mode needs an explicit headed param while uc-mode is in headed mode by default
-        '''
-        if self.selenium_mode == 'wire':
-            if self.selenium_headed:
-                driver = Driver(wire=True, headed=True, proxy=self.proxy)
-            else:
-                driver = Driver(wire=True, proxy=self.proxy)
-            driver.set_window_size(1920, 1080)
-            return driver
-        elif self.selenium_mode == 'uc':
-            if self.selenium_headed:
-                driver = Driver(uc=True, proxy=self.proxy)
-            else:
-                driver = Driver(uc=True, headless=True, proxy=self.proxy)
-            driver.set_window_size(1920, 1080)
-            return driver
-        else:
-            logging.error(f'Invalid parameter set for selenium_mode: "{self.selenium_mode}". Use either "wire" or "uc".')
-            raise ValueError('Invalid parameter for selenium_mode')
-
 
     def get_element_by_xpath(self, driver, xpath_selector, multiple=False):
         '''
@@ -167,6 +143,7 @@ class ArticleLinkScraper():
         '''
         Starts a run, creates a driver and returns a list of links.
         '''
+        logging.info('Combining wire mode and a proxy will always start a headed browser.')
         if self.scraping_mode == 'RSS':
             if self.selenium_settings['mode'] == 'uc':
                 with SB(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy']) as driver:
@@ -175,7 +152,7 @@ class ArticleLinkScraper():
                 driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                 return self.scrape_links_rss(driver)
         elif self.scraping_mode == 'API':
-            logging.info('Note: Combining wire mode and a proxy will always start a headed browser. Also, using a proxy will probably interfere with capturing API requests. Use RSS or FRONTEND mode instead.')
+            logging.info('Note: Using a proxy will probably interfere with capturing API requests. Use RSS or FRONTEND mode instead.')
             if self.selenium_settings['mode'] == 'uc':
                 raise ValueError('API requests cannot be parsed in Seleniumbase UC-mode. Use wire mode instead.')
             else:
@@ -199,11 +176,8 @@ class ArticleContentScraper():
     The first entry is the XPATH selector to select the element/s.
     The second entry is a boolean - true to parse multiple elements for the same XPATH selector.
     The third entriy is a lambda function to parse the content, i.e.: lambda response: [x.get_attribute('href) for x in response]
-
     :param str scraping_mode: Determines how links should be parsed from the site. Options: 'RSS', 'FRONTEND' or 'API'
-    :param str proxy: An optional proxy URL
-    :param str selenium_mode: Either 'uc' for SeleniumBase's undetected mode or 'wire' to capture backend responses. Default mode is uc
-    :param boolean selenium_headed: True to run Selenium in a headed Chrome instance. Default mode is headless
+    :param dict selenium_settings: Determines what kind of driver and how it is started. Default: mode=uc, headed=True, proxy=None
     :param (str, boolean, func) datetime_published_selector: The date and time of publication
     :param (str, boolean, func) image_url_selector: The url of the main article image
     :param (str, boolean, func) category_selector: The category of the article
@@ -220,9 +194,11 @@ class ArticleContentScraper():
     def __init__(
         self,
         scraping_mode,
-        proxy=None,
-        selenium_mode='uc',
-        selenium_headed=False,
+        selenium_settings={
+            'mode': 'uc',
+            'headed': True,
+            'proxy': None
+        },
         link_list=None,
         medium=None,
         db=None,
@@ -240,9 +216,7 @@ class ArticleContentScraper():
         author_selector=None
     ):
         self.scraping_mode = scraping_mode
-        self.proxy = proxy
-        self.selenium_mode = selenium_mode
-        self.selenium_headed = selenium_headed
+        self.selenium_settings = selenium_settings
         self.link_list = link_list
         self.medium = medium
         self.diff_to_utc = self.set_utc_difference()
@@ -270,30 +244,6 @@ class ArticleContentScraper():
         else:
             return 1
             
-
-    def create_selenium_driver(self):
-        '''
-        Starts Selenium using SeleniumBase and returns the driver.
-        Note: SeleniumBase's wire-mode needs an explicit headed param while uc-mode is in headed mode by default
-        '''
-        if self.selenium_mode == 'wire':
-            if self.selenium_headed:
-                driver = Driver(wire=True, headed=True, proxy=self.proxy)
-            else:
-                driver = Driver(wire=True, proxy=self.proxy)
-            driver.set_window_size(1920, 1080)
-            return driver
-        elif self.selenium_mode == 'uc':
-            if self.selenium_headed:
-                driver = Driver(uc=True, proxy=self.proxy)
-            else:
-                driver = Driver(uc=True, headless=True, proxy=self.proxy)
-            driver.set_window_size(1920, 1080)
-            return driver
-        else:
-            logging.error(f'Invalid parameter set for selenium_mode: "{self.selenium_mode}". Use either "wire" or "uc".')
-            raise ValueError('Invalid parameter for selenium_mode')
-
 
     def get_element_by_xpath(self, driver, xpath_selector, multiple=False, func=None):
         if xpath_selector != None:
@@ -329,6 +279,8 @@ class ArticleContentScraper():
     def scrape_article_frontend(self, driver, link):
         '''
         Navigates to the given link and scrapes the data from the article page by selecting elements from the frontend.
+        :param Driver driver: An instance of a selenium driver with the corresponding article page already opened
+        :param str link: The archive link used to open the article page. Needed here to pass into the resulting article_data dict
         '''
         article_data = {}
         if self.pre_hooks:
@@ -392,7 +344,7 @@ class ArticleContentScraper():
         article_data['datetime_saved'] = datetime.datetime.utcnow()
         article_data['datetime_published'] = datetime_published
         article_data['paywall'] = paywall
-        article_data['url'] = driver.current_url
+        article_data['url'] = driver.get_current_url() if self.selenium_settings['mode'] == 'uc' else driver.current_url
         article_data['author'] = author
         article_data['category'] = category
         article_data['image_url'] = image_url
@@ -411,27 +363,39 @@ class ArticleContentScraper():
                     continue
         return article_data
 
-    
+
     def run(self):
         '''
-        Starts the scraper.
+        Starts a run, creates a driver and returns the article data as a list of dicts.
         '''
         if self.link_list:
+            logging.info('Combining wire mode and a proxy will always start a headed browser.')
             articles = []
             if self.scraping_mode == 'RSS':
                 pass # TODO
             elif self.scraping_mode == 'API':
                 pass # TODO
             elif self.scraping_mode == 'FRONTEND':
-                driver = self.create_selenium_driver()
-                for link in self.link_list:
-                    driver.get(link)
-                    article_data = self.scrape_article_frontend(driver, link)
-                    articles.append(article_data)
-                    time.sleep(random.randint(1, 5))
-                driver.quit()
-                return articles
+                if self.selenium_settings['mode'] == 'uc':
+                    with SB(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy']) as driver:
+                        driver.set_window_size(1920, 1080)
+                        for link in self.link_list:
+                            driver.uc_open_with_reconnect(link)
+                            article_data = self.scrape_article_frontend(driver, link)
+                            articles.append(article_data)
+                            time.sleep(random.randint(1, 5))
+                        return articles
+                else:
+                    driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver.set_window_size(1920, 1080)
+                    for link in self.link_list:
+                        driver.get(link)
+                        article_data = self.scrape_article_frontend(driver, link)
+                        articles.append(article_data)
+                        time.sleep(random.randint(1, 5))
+                    driver.quit()
+                    return articles
             else:
                 raise ValueError('You need to specify a scraping method.')
         else:
-            raise ValueError('link_list is empty.')
+            raise ValueError('link_list is empty')
