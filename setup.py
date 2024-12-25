@@ -13,7 +13,7 @@ setup(
     ],
     author='Karim Dabbouz',
     author_email='hey@karim.ooo',
-    description='A Python with utils to scrape articles from any news outlet.',
+    description='A Python package with utils to scrape articles from any news outlet.',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
     url='https://github.com/karimdabbouz/news_scraper',

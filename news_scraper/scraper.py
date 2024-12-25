@@ -1,9 +1,10 @@
 from seleniumbase import Driver, SB
 import xml.etree.ElementTree as ET
+from zoneinfo import ZoneInfo
 from seleniumwire.utils import decode as decodesw
 from selenium.webdriver.common.by import By
 
-import logging, time, json, random
+import logging, time, json, random, datetime
 
 
 
@@ -12,9 +13,7 @@ class ArticleLinkScraper():
     A flexible scraper to parse links for news articles from any news outlet.
 
     :param str scraping_mode: Determines how links should be parsed from the site. Options: 'RSS', 'FRONTEND' or 'API'
-    :param str proxy: An optional proxy URL
-    :param str selenium_mode: Either 'uc' for SeleniumBase's undetected mode or 'wire' to capture backend responses. Default mode is uc
-    :param boolean selenium_headed: True to run Selenium in a headed Chrome instance. Default mode is headless
+    :param dict selenium_settings: Determines what kind of driver and how it is started. Default: mode=uc, headed=True, proxy=None
     :param [str] urls: The URLs to parse links from. Needs to be a list, even for RSS feeds where only the first entry is parsed
     :param str/lambda article_url_selector: The XPATH selector to access the article links or a lambda expression that takes a JSON and returns a list of links, i.e.
     lambda response: [x['url'] for x in response['docs']]
@@ -22,16 +21,16 @@ class ArticleLinkScraper():
     def __init__(
         self,
         scraping_mode,
-        proxy=None,
-        selenium_mode='uc',
-        selenium_headed=False,
+        selenium_settings={
+            'mode': 'uc',
+            'headed': True,
+            'proxy': None
+        },
         urls=None,
         article_url_selector=None
     ):
         self.scraping_mode=scraping_mode
-        self.proxy=proxy
-        self.selenium_mode=selenium_mode
-        self.selenium_headed=selenium_headed
+        self.selenium_settings=selenium_settings
         self.urls=urls
         self.article_url_selector=article_url_selector
         
@@ -75,15 +74,21 @@ class ArticleLinkScraper():
         return element
 
 
-    def scrape_links_rss(self):
+    def scrape_links_rss(self, driver):
         '''
         Calls the first url in self.urls assuming it returns an RSS XML response.
         Returns a list of links for the latest articles.
         '''
-        driver = self.create_selenium_driver()
-        driver.get(self.urls[0])
+        driver.set_window_size(1920, 1080)
+        if self.selenium_settings['mode'] == 'uc':
+            driver.uc_open_with_reconnect(self.urls[0])
+        else:
+            driver.get(self.urls[0])
         try:
-            xml_content = driver.page_source
+            if self.selenium_settings['mode'] == 'uc':
+                xml_content = driver.get_page_source()
+            else:
+                xml_content = driver.page_source
             root = ET.fromstring(xml_content)
             link_list = [x.find('link').text for x in root.findall('.//item')]
             return link_list
@@ -92,15 +97,16 @@ class ArticleLinkScraper():
             raise
         finally:
             time.sleep(2)
-            driver.quit()
+            if not self.selenium_settings['mode'] == 'uc':
+                driver.quit()
 
 
-    def scrape_links_api(self):
+    def scrape_links_api(self, driver):
         '''
         Loops over and calls the urls in self.urls assuming they return an API JSON response.
         Returns a list of links for the latest articles.
         '''
-        driver = self.create_selenium_driver()
+        driver.set_window_size(1920, 1080)
         link_list = []
         for page in self.urls:
             try:
@@ -123,50 +129,67 @@ class ArticleLinkScraper():
             driver.quit()
             return link_list
         else:
-            logging.error(f'No links could be parsed. link_list is empty.')
             time.sleep(2)
             driver.quit()
-            raise Exception('No links could be parsed.')
+            raise Exception('No links could be parsed. link_list is empty.')
         
 
-    def scrape_links_frontend(self):
+    def scrape_links_frontend(self, driver):
         '''
         Loops over and calls urls in self.urls and scrapes the article links from the frontend.
         Returns a list of links for the latest articles.
         '''
-        driver = self.create_selenium_driver()
+        driver.set_window_size(1920, 1080)
         link_list = []
         for page in self.urls:
             try:
-                driver.get(page)
+                if self.selenium_settings['mode'] == 'uc':
+                    driver.uc_open_with_reconnect(page)
+                else:
+                    driver.get(page)
                 [link_list.append(x.get_attribute('href')) for x in self.get_element_by_xpath(driver, self.article_url_selector, multiple=True)]
             except Exception as e:
                 logging.error(f'Error opening or parsing of url {page}. Skipping this one - {e}')
                 continue
         if link_list:
             time.sleep(2)
-            driver.quit()
+            if not self.selenium_settings['mode'] == 'uc':
+                driver.quit()
             return link_list
         else:
-            logging.error(f'No links could be parsed. link_list is empty.')
             time.sleep(2)
-            driver.quit()
-            raise Exception('No links could be parsed.')
-        
+            if not self.selenium_settings['mode'] == 'uc':
+                driver.quit()
+            raise Exception('No links could be parsed. link_list is empty.')
 
+    
     def run(self):
         '''
-        Starts a run and returns a list of links.
+        Starts a run, creates a driver and returns a list of links.
         '''
         if self.scraping_mode == 'RSS':
-            return self.scrape_links_rss()
+            if self.selenium_settings['mode'] == 'uc':
+                with SB(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy']) as driver:
+                    return self.scrape_links_rss(driver)
+            else:
+                driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                return self.scrape_links_rss(driver)
         elif self.scraping_mode == 'API':
-            return self.scrape_links_api()
+            logging.info('Note: Combining wire mode and a proxy will always start a headed browser. Also, using a proxy will probably interfere with capturing API requests. Use RSS or FRONTEND mode instead.')
+            if self.selenium_settings['mode'] == 'uc':
+                raise ValueError('API requests cannot be parsed in Seleniumbase UC-mode. Use wire mode instead.')
+            else:
+                driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                return self.scrape_links_api(driver)
         elif self.scraping_mode == 'FRONTEND':
-            return self.scrape_links_frontend()
+            if self.selenium_settings['mode'] == 'uc':
+                with SB(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy']) as driver:
+                    return self.scrape_links_frontend(driver)
+            else:
+                driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                return self.scrape_links_frontend(driver)
         else:
-            raise ValueError('You need to specify a scraping method.')
-
+            raise ValueError('You need to specify a scraping method')
 
 
 class ArticleContentScraper():

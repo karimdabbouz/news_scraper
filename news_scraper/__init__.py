@@ -1,3 +1,3 @@
-from .scraper import ArticleLinkScraper
+from .scraper import ArticleLinkScraper, ArticleContentScraper
 
-__all__ = ['ArticleLinkScraper']
+__all__ = ['ArticleLinkScraper', 'ArticleContentScraper']
