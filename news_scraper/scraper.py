@@ -344,7 +344,7 @@ class ArticleContentScraper():
         article_data['datetime_saved'] = datetime.datetime.utcnow()
         article_data['datetime_published'] = datetime_published
         article_data['paywall'] = paywall
-        article_data['url'] = driver.get_current_url() if self.selenium_settings['mode'] == 'uc' else driver.current_url
+        article_data['url'] = driver.current_url
         article_data['author'] = author
         article_data['category'] = category
         article_data['image_url'] = image_url
@@ -377,24 +377,31 @@ class ArticleContentScraper():
                 pass # TODO
             elif self.scraping_mode == 'FRONTEND':
                 if self.selenium_settings['mode'] == 'uc':
-                    with SB(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy']) as driver:
+                    try:
+                        driver = Driver(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                         driver.set_window_size(1920, 1080)
                         for link in self.link_list:
                             driver.uc_open_with_reconnect(link)
                             article_data = self.scrape_article_frontend(driver, link)
                             articles.append(article_data)
                             time.sleep(random.randint(1, 5))
+                        driver.quit()
                         return articles
+                    finally:
+                        driver.quit()
                 else:
-                    driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                    driver.set_window_size(1920, 1080)
-                    for link in self.link_list:
-                        driver.get(link)
-                        article_data = self.scrape_article_frontend(driver, link)
-                        articles.append(article_data)
-                        time.sleep(random.randint(1, 5))
-                    driver.quit()
-                    return articles
+                    try:
+                        driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                        driver.set_window_size(1920, 1080)
+                        for link in self.link_list:
+                            driver.get(link)
+                            article_data = self.scrape_article_frontend(driver, link)
+                            articles.append(article_data)
+                            time.sleep(random.randint(1, 5))
+                        driver.quit()
+                        return articles
+                    finally:
+                        driver.quit()
             else:
                 raise ValueError('You need to specify a scraping method.')
         else:
