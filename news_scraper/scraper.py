@@ -406,3 +406,139 @@ class ArticleContentScraper():
                 raise ValueError('You need to specify a scraping method.')
         else:
             raise ValueError('link_list is empty')
+
+
+
+class ScraperDB():
+    '''
+    Connection to a table in my Postgres database for news articles.
+    Provides functions to write new articles to the db,
+    check for and remove duplicates, load the latest n articles, etc.
+    '''
+    def __init__(self, host, port, db_name, username, password, table_name):
+        self.host = host
+        self.port = port
+        self.db_name = db_name
+        self.username = username
+        self.password = password
+        self.engine = create_engine(f'postgresql://{self.username}:{self.password}@{self.host}:{self.port}/{self.db_name}?sslmode=require')
+        self.metadata = MetaData()
+        self.table_name = table_name
+        self.Base = declarative_base()
+        self.TableClass = self.create_table_class()        
+        self.Session = scoped_session(sessionmaker(bind=self.engine))
+
+    
+    def create_table_class(self):
+        '''
+        Creates an SQLAlchemy table using the Base class.
+        Uses the specified schema if table does not yet exist.
+        If it exists, it reads the table schema from the db.
+        '''
+        if not self.engine.dialect.has_table(self.engine.connect(), self.table_name):
+            class TableClass(self.Base):
+                __tablename__ = self.table_name
+                id = Column(Integer, primary_key=True)
+                medium = Column(String)
+                datetime_saved = Column(DateTime)
+                datetime_published = Column(DateTime)
+                url = Column(String)
+                image_url = Column(String)
+                category = Column(String)
+                headline = Column(String)
+                kicker = Column(String)
+                teaser = Column(String)
+                body = Column(String)
+                subheadlines = Column(String)
+                paywall = Column(Boolean)
+                author = Column(String)
+                archive_url = Column(String)
+            return TableClass
+        else:
+            class TableClass(self.Base):
+                __table__ = Table(self.table_name, self.metadata, autoload_with=self.engine)
+            return TableClass
+
+
+    def get_engine(self):
+        '''
+        Returns the engine
+        '''
+        return self.engine
+
+
+    def create_table(self):
+        '''
+        Creates a table for articles in my article database if it does not exist yet.
+        '''
+        if not self.engine.dialect.has_table(self.engine.connect(), self.table_name):
+            self.Base.metadata.create_all(self.engine)
+            print(f'The following table has been created: {self.table_name}')
+        else:
+            print(f'Table for {self.table_name} already exists.')
+
+
+    def write_articles_to_db(self, articles):
+        '''
+        Takes a list of articles and writes them to the database.
+        '''
+        with self.Session() as session:
+            article_objects = [self.TableClass(**article) for article in articles]
+            session.bulk_save_objects(article_objects)
+            session.commit()
+
+
+    def read_from_db(self, entry_id=None):
+        '''
+        Reads an entry from the database.
+        If entry_id is specified, it returns a single entry.
+        Otherwise it returns all entries as a DataFrame.
+        :param int entry_id: The id to retrieve
+        '''
+        with self.Session() as session:
+            if entry_id:
+                result = session.query(self.TableClass).filter_by(id=entry_id).first()
+                return result
+            else: 
+                result = [x for x in session.query(self.TableClass).all()]
+                df = pd.DataFrame([x.__dict__ for x in result])
+                df.drop('_sa_instance_state', axis=1, inplace=True)
+                return df
+
+
+    def load_latest_n_article_urls(self, n):
+        '''
+        Loads the archive_url (link_list url) for the latest n articles saved to the db.
+        '''
+        with self.Session() as session:
+            return [x.archive_url for x in session.query(self.TableClass).order_by(self.TableClass.datetime_saved.desc()).limit(n)]
+
+
+    def check_for_duplicates(self):
+        '''
+        Checks for duplicates based on the archive_url.
+        Returns the duplicate rows.
+        '''
+        with self.Session() as session:
+            subquery = session.query(self.TableClass.archive_url).group_by(self.TableClass.archive_url).having(func.count() > 1).subquery()
+            query = session.query(self.TableClass).join(subquery, self.TableClass.archive_url == subquery.c.archive_url)
+            return [(x.id, x.datetime_saved, x.headline, x.archive_url) for x in query.all()]
+
+
+    def remove_duplicates(self):
+        '''
+        Removes duplicates.
+        '''
+        duplicates = self.check_for_duplicates()
+        entries_to_remove = []
+        counter = collections.Counter([x[3] for x in duplicates])
+        for row in duplicates:
+            appearances = counter.get(row[3])
+            if row[3] not in [x[3] for x in entries_to_remove]:
+                entries_to_remove.append(row)
+            else:
+                if collections.Counter([x[3] for x in entries_to_remove]).get(row[3]) < appearances - 1:
+                    entries_to_remove.append(row)
+        with self.Session() as session:
+            session.query(self.TableClass).filter(self.TableClass.id.in_([x[0] for x in entries_to_remove])).delete(synchronize_session='fetch')
+            session.commit()
