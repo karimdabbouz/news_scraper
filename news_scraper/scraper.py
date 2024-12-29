@@ -5,6 +5,8 @@ from seleniumwire.utils import decode as decodesw
 from selenium.webdriver.common.by import By
 
 import logging, time, json, random, datetime
+from sqlalchemy import create_engine, inspect, Table, MetaData, select, Column, Integer, String, DateTime, Boolean, func
+from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 
 
