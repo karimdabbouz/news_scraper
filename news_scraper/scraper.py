@@ -409,7 +409,7 @@ class ArticleContentScraper():
 
 
 
-class ScraperDB():
+class ArticleDB():
     '''
     Connection to a table in my Postgres database for news articles.
     Provides functions to write new articles to the db,
