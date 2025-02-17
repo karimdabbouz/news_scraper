@@ -4,7 +4,7 @@ This is a python package to scrape news articles in structured format from any n
 
 After having collected a list of URLs with the ArticleLinkScraper you can then instantiate the ArticleContentScraper with the necessary selectors like this:
 
-'''
+```
 article_content_scraper = ArticleContentScraper(
     scraping_mode='FRONTEND',
     selenium_headed=True,
@@ -21,6 +21,6 @@ article_content_scraper = ArticleContentScraper(
     teaser_selector=('//div[@class="header-teaser flex items-start"]', False, lambda element: element.text),
     body_selector=('//p[@class="body-elements__paragraph"]', True, lambda element: [x.text for x in element])
 )
-'''
+```
 
 WIP...
