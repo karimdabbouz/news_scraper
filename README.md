@@ -1,6 +1,6 @@
 # news-scraper
 
-This is a python package to scrape news articles in structured format from any news outlet. It takes XPATH selectors and lambda functions as arguments to access headlines, teaser, body text, etc. Example:
+This is a python package to scrape news articles in structured format from any news outlet. It takes XPATH selectors and lambda functions as arguments to access headlines, teaser, body text, etc.
 
 After having collected a list of URLs with the ArticleLinkScraper you can then instantiate the ArticleContentScraper with the necessary selectors like this:
 
