@@ -1,13 +1,12 @@
 from seleniumbase import Driver, SB
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
-from seleniumwire.utils import decode as decodesw
 from selenium.webdriver.common.by import By
-
+from seleniumwire.utils import decode as decodesw
 import logging, time, json, random, datetime
 from sqlalchemy import create_engine, inspect, Table, MetaData, select, Column, Integer, String, DateTime, Boolean, func
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
-
+from typing import List
 
 
 class ArticleLinkScraper():
@@ -16,7 +15,7 @@ class ArticleLinkScraper():
 
     :param str scraping_mode: Determines how links should be parsed from the site. Options: 'RSS', 'FRONTEND' or 'API'
     :param dict selenium_settings: Determines what kind of driver and how it is started. Default: mode=uc, headed=True, proxy=None
-    :param [str] urls: The URLs to parse links from. Needs to be a list, even for RSS feeds where only the first entry is parsed
+    :param [str] urls: The URLs to parse links from, i.e. a list of paginated article archive pages. Needs to be a list even for RSS feeds and API where only the first entry is parsed.
     :param str/lambda article_url_selector: The XPATH selector to access the article links or a lambda expression that takes a JSON and returns a list of links, i.e.
     lambda response: [x['url'] for x in response['docs']]
     '''
@@ -35,9 +34,76 @@ class ArticleLinkScraper():
         self.selenium_settings=selenium_settings
         self.urls=urls
         self.article_url_selector=article_url_selector
-        
 
-    def get_element_by_xpath(self, driver, xpath_selector, multiple=False):
+
+    def _initialize_driver(self) -> Driver:
+        '''
+        Creates a Selenium driver using SeleniumBase.
+        '''
+        if self.scraping_mode == 'FRONTEND':
+            if self.selenium_settings['mode'] == 'uc':
+                try:
+                    driver = Driver(uc=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver.set_window_size(1920, 1080)
+                    return driver
+                except Exception as e:
+                    raise Exception(f'Error initializing driver: {e}')
+            else:
+                try:
+                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver.set_window_size(1920, 1080)
+                    return driver
+                except Exception as e:
+                    raise Exception(f'Error initializing driver: {e}')
+        elif self.scraping_mode == 'API':
+            self._log_event('warning', 'Using a proxy will probably interfere with capturing API requests. Use UI or RSS mode instead.')
+            if self.selenium_settings['mode'] == 'uc':
+                self._log_event('error', 'UC mode is not supported for API scraping. Use UI or RSS mode instead.')
+                raise Exception('UC mode is not supported for API scraping. Use UI or RSS mode instead.')
+            else:
+                try:
+                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver.set_window_size(1920, 1080)
+                    return driver
+                except Exception as e:
+                    raise Exception(f'Error initializing driver: {e}')
+        elif self.scraping_mode == 'RSS':
+            if self.selenium_settings['mode'] == 'uc':
+                try:
+                    driver = Driver(uc=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver.set_window_size(1920, 1080)
+                    return driver
+                except Exception as e:
+                    raise Exception(f'Error initializing driver: {e}')
+            else:
+                try:
+                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver.set_window_size(1920, 1080)
+                    return driver
+                except Exception as e:
+                    raise Exception(f'Error initializing driver: {e}')
+        else:
+            raise ValueError(f'Invalid value for scraping_mode')
+        
+    
+    def _log_event(self, level, message, **kwargs):
+        '''
+        Logs an event with the given level and message.
+
+        Args:
+            level: The log level (e.g., 'info', 'warning', 'error')
+            message: The log message
+            **kwargs: Additional keyword arguments for formatting the message
+        '''
+        log_data = {
+            'scraper': self.__class__.__name__,
+            **kwargs
+        }
+        log_message = f'{message} | {log_data}'
+        getattr(logging, level)(log_message)
+
+
+    def _get_element_by_xpath(self, driver, xpath_selector, multiple=False):
         '''
         Returns the element defined by the selector.
         If multiple is set to True, it returns a list of elements.
@@ -52,7 +118,7 @@ class ArticleLinkScraper():
         return element
 
 
-    def scrape_links_rss(self, driver):
+    def _scrape_links_rss(self, driver) -> List[str]:
         '''
         Calls the first url in self.urls assuming it returns an RSS XML response.
         Returns a list of links for the latest articles.
@@ -69,11 +135,9 @@ class ArticleLinkScraper():
         except Exception as e:
             logging.error(f'RSS could not be parsed: {e}')
             raise
-        finally:
-            driver.quit()
 
 
-    def scrape_links_api(self, driver):
+    def _scrape_links_api(self, driver) -> List[str]:
         '''
         Loops over and calls the urls in self.urls assuming they return an API JSON response.
         Returns a list of links for the latest articles.
@@ -97,14 +161,13 @@ class ArticleLinkScraper():
                 continue
         if link_list:
             time.sleep(2)
-            driver.quit()
             return link_list
         else:
             time.sleep(2)
             raise Exception('No links could be parsed. link_list is empty.')
         
 
-    def scrape_links_frontend(self, driver):
+    def _scrape_links_frontend(self, driver) -> List[str]:
         '''
         Loops over and calls urls in self.urls and scrapes the article links from the frontend.
         Returns a list of links for the latest articles.
@@ -122,433 +185,406 @@ class ArticleLinkScraper():
                 continue
         if link_list:
             time.sleep(2)
-            driver.quit()
             return link_list
         else:
             time.sleep(2)
             raise Exception('No links could be parsed. link_list is empty.')
     
     
-    def run(self):
+    def run(self) -> List[str]:
         '''
         Starts a run, creates a driver and returns a list of links.
         '''
-        logging.info('Combining wire mode and a proxy will always start a headed browser.')
-        if self.scraping_mode == 'RSS':
-            if self.selenium_settings['mode'] == 'uc':
-                try:
-                    driver = Driver(uc=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                    driver.set_window_size(1920, 1080)
-                    return self.scrape_links_rss(driver)
-                finally:
-                    driver.quit()
+        driver = self._initialize_driver()
+        try:
+            if self.scraping_mode == 'RSS':
+                return self._scrape_links_rss(driver)
+            elif self.scraping_mode == 'API':
+                return self._scrape_links_api(driver)
+            elif self.scraping_mode == 'FRONTEND':
+                return self._scrape_links_frontend(driver)
             else:
-                try:
-                    driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                    driver.set_window_size(1920, 1080)
-                    return self.scrape_links_rss(driver)
-                finally:
-                    driver.quit()
-        elif self.scraping_mode == 'API':
-            logging.info('Note: Using a proxy will probably interfere with capturing API requests. Use RSS or FRONTEND mode instead.')
-            if self.selenium_settings['mode'] == 'uc':
-                raise ValueError('API requests cannot be parsed in Seleniumbase UC-mode. Use wire mode instead.')
-            else:
-                try:
-                    driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                    driver.set_window_size(1920, 1080)
-                    return self.scrape_links_api(driver)
-                finally:
-                    driver.quit()
-        elif self.scraping_mode == 'FRONTEND':
-            if self.selenium_settings['mode'] == 'uc':
-                try:
-                    driver = Driver(uc=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                    driver.set_window_size(1920, 1080)
-                    return self.scrape_links_frontend(driver)
-                finally:
-                    driver.quit()
-            else:
-                try:
-                    driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                    driver.set_window_size(1920, 1080)
-                    return self.scrape_links_frontend(driver)
-                finally:
-                    driver.quit()
-        else:
-            raise ValueError('You need to specify a scraping method')
-
-
-class ArticleContentScraper():
-    '''
-    A flexible scraper to parse content from articles from any news outlet.
-    Selectors are passed as tuples with three entries:
-    The first entry is the XPATH selector to select the element/s.
-    The second entry is a boolean - true to parse multiple elements for the same XPATH selector.
-    The third entriy is a lambda function to parse the content, i.e.: lambda response: [x.get_attribute('href) for x in response]
-    :param str scraping_mode: Determines how links should be parsed from the site. Options: 'RSS', 'FRONTEND' or 'API'
-    :param dict selenium_settings: Determines what kind of driver and how it is started. Default: mode=uc, headed=True, proxy=None
-    :param (str, boolean, func) datetime_published_selector: The date and time of publication
-    :param (str, boolean, func) image_url_selector: The url of the main article image
-    :param (str, boolean, func) category_selector: The category of the article
-    :param (str, boolean, func) kicker_selector: The kicker/topline of the article
-    :param (str, boolean, func) headline_selector: The headline of the article
-    :param (str, boolean, func) teaser_selector: The teaser of the article
-    :param (str, boolean, func) body_selector: The body of the article
-    :param (str, boolean, func) subheadlines_selector: The subheadlines of the article
-    :param (str, boolean, func) paywall_selector: A HTML element that's present if the article is paywalled
-    :param (str, boolean, func) author_selector: The author/s of the article
-    :param [func] pre_hooks: One or more functions to run before parsing content, i.e. to close a modal
-    :param [func] post_hooks: One or more functions to parse additional data that is not included in all news outlets
-    '''
-    def __init__(
-        self,
-        scraping_mode,
-        selenium_settings={
-            'mode': 'uc',
-            'headed': True,
-            'proxy': None
-        },
-        link_list=None,
-        medium=None,
-        db=None,
-        pre_hooks=None,
-        post_hooks=None,
-        datetime_published_selector=None,
-        image_url_selector=None,        
-        category_selector=None,
-        kicker_selector=None,
-        headline_selector=None,
-        teaser_selector=None,
-        body_selector=None,
-        subheadlines_selector=None,
-        paywall_selector=None,
-        author_selector=None
-    ):
-        self.scraping_mode = scraping_mode
-        self.selenium_settings = selenium_settings
-        self.link_list = link_list
-        self.medium = medium
-        self.diff_to_utc = self.set_utc_difference()
-        self.db = db
-        self.pre_hooks = pre_hooks
-        self.post_hooks = post_hooks
-        self.datetime_published_selector = datetime_published_selector
-        self.image_url_selector = image_url_selector
-        self.category_selector = category_selector
-        self.kicker_selector = kicker_selector
-        self.headline_selector = headline_selector
-        self.teaser_selector = teaser_selector
-        self.body_selector = body_selector
-        self.subheadlines_selector = subheadlines_selector
-        self.paywall_selector = paywall_selector
-        self.author_selector = author_selector
-
-    
-    def set_utc_difference(self):
-        '''
-        Determines the difference to UTC time for central Europe.
-        '''
-        if datetime.datetime.now(ZoneInfo('Europe/Brussels')).dst() != datetime.timedelta(0):
-            return 2
-        else:
-            return 1
+                raise ValueError('You need to specify a scraping_mode')
+        finally:
+            driver.quit()
             
 
-    def get_element_by_xpath(self, driver, xpath_selector, multiple=False, func=None):
-        if xpath_selector != None:
-            if multiple:
-                if func:
-                    element = func(driver.find_elements(By.XPATH, xpath_selector))
-                else:
-                    element = driver.find_elements(By.XPATH, xpath_selector)
-            else:
-                if func:
-                    element = func(driver.find_element(By.XPATH, xpath_selector))
-                else:
-                    element = driver.find_element(By.XPATH, xpath_selector)
-        else:
-            element = None
-        return element
-
-
-    def scrape_article_rss(self):
-        '''
-        TODO
-        '''
-        pass
-
-
-    def scrape_article_api(self):
-        '''
-        TODO
-        '''
-        pass
-
-
-    def scrape_article_frontend(self, driver, link):
-        '''
-        Navigates to the given link and scrapes the data from the article page by selecting elements from the frontend.
-        :param Driver driver: An instance of a selenium driver with the corresponding article page already opened
-        :param str link: The archive link used to open the article page. Needed here to pass into the resulting article_data dict
-        '''
-        article_data = {}
-        if self.pre_hooks:
-            for hook in self.pre_hooks:
-                try:
-                    hook(driver)
-                except Exception as e:
-                    logging.error(f'Could not run pre_hook {hook}: {e}')
-                    continue
-        try:
-            datetime_published = self.get_element_by_xpath(driver, self.datetime_published_selector[0], func=self.datetime_published_selector[2])
-        except Exception as e:
-            datetime_published = None
-            logging.error(f'datetime_published could not be parsed: {e} ')
-        try:
-            paywall = self.get_element_by_xpath(driver, self.paywall_selector[0], multiple=self.paywall_selector[1], func=self.paywall_selector[2])
-        except Exception as e:
-            paywall = None
-            logging.error(f'paywall could not be identified: {e}')
-        try:
-            author = self.get_element_by_xpath(driver, self.author_selector[0], func=self.author_selector[2])
-        except Exception as e:
-            author = None
-            logging.error(f'author could not be parsed: {e} ')
-        try:
-            category = self.get_element_by_xpath(driver, self.category_selector[0], multiple=self.category_selector[1], func=self.category_selector[2])
-        except Exception as e:
-            category = None
-            logging.error(f'category could not be parsed: {e} ')
-        try:
-            image_url = self.get_element_by_xpath(driver, self.image_url_selector[0], func=self.image_url_selector[2])
-        except Exception as e:
-            image_url = None
-            logging.error(f'image_url could not be parsed: {e} ')
-        try:
-            kicker = self.get_element_by_xpath(driver, self.kicker_selector[0], multiple=self.kicker_selector[1], func=self.kicker_selector[2])
-        except Exception as e:
-            kicker = None
-            logging.error(f'kicker could not be parsed: {e} ')
-        try:
-            headline = self.get_element_by_xpath(driver, self.headline_selector[0], func=self.headline_selector[2])
-        except Exception as e:
-            headline = None
-            logging.error(f'headline could not be parsed: {e} ')
-        try:
-            teaser = self.get_element_by_xpath(driver, self.teaser_selector[0], multiple=self.teaser_selector[1], func=self.teaser_selector[2])
-        except Exception as e:
-            teaser = None
-            logging.error(f'teaser could not be parsed: {e} ')
-        try:
-            body = self.get_element_by_xpath(driver, self.body_selector[0], multiple=self.body_selector[1], func=self.body_selector[2])
-        except Exception as e:
-            body = None
-            logging.error(f'body could not be parsed: {e} ')
-        try:
-            subheadlines = self.get_element_by_xpath(driver, self.subheadlines_selector[0], multiple=self.subheadlines_selector[1], func=self.subheadlines_selector[2])
-        except Exception as e:
-            subheadlines = None
-            logging.error(f'subheadlines could not be parsed: {e} ')
-        article_data['medium'] = self.medium
-        article_data['datetime_saved'] = datetime.datetime.utcnow()
-        article_data['datetime_published'] = datetime_published
-        article_data['paywall'] = paywall
-        article_data['url'] = driver.current_url
-        article_data['author'] = author
-        article_data['category'] = category
-        article_data['image_url'] = image_url
-        article_data['kicker'] = kicker
-        article_data['headline'] = headline
-        article_data['teaser'] = teaser
-        article_data['body'] = body
-        article_data['subheadlines'] = subheadlines
-        article_data['archive_url'] = link
-        if self.post_hooks:
-            for hook in self.post_hooks:
-                try:
-                    hook(driver, article_data)
-                except Exception as e:
-                    logging.error(f'Could not run post_hook {hook}: {e}')
-                    continue
-        return article_data
-
-
-    def run(self):
-        '''
-        Starts a run, creates a driver and returns the article data as a list of dicts.
-        '''
-        if self.link_list:
-            logging.info('Combining wire mode and a proxy will always start a headed browser.')
-            articles = []
-            if self.scraping_mode == 'RSS':
-                pass # TODO
-            elif self.scraping_mode == 'API':
-                pass # TODO
-            elif self.scraping_mode == 'FRONTEND':
-                if self.selenium_settings['mode'] == 'uc':
-                    try:
-                        driver = Driver(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                        driver.set_window_size(1920, 1080)
-                        for link in self.link_list:
-                            driver.uc_open_with_reconnect(link)
-                            article_data = self.scrape_article_frontend(driver, link)
-                            articles.append(article_data)
-                            time.sleep(random.randint(1, 5))
-                        driver.quit()
-                        return articles
-                    finally:
-                        driver.quit()
-                else:
-                    try:
-                        driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
-                        driver.set_window_size(1920, 1080)
-                        for link in self.link_list:
-                            driver.get(link)
-                            article_data = self.scrape_article_frontend(driver, link)
-                            articles.append(article_data)
-                            time.sleep(random.randint(1, 5))
-                        driver.quit()
-                        return articles
-                    finally:
-                        driver.quit()
-            else:
-                raise ValueError('You need to specify a scraping method.')
-        else:
-            raise ValueError('link_list is empty')
-
-
+class ArticleContentScraper():
+    pass
 
 class ArticleDB():
-    '''
-    Connection to a table in my Postgres database for news articles.
-    Provides functions to write new articles to the db,
-    check for and remove duplicates, load the latest n articles, etc.
-    '''
-    def __init__(self, host, port, db_name, username, password, table_name):
-        self.host = host
-        self.port = port
-        self.db_name = db_name
-        self.username = username
-        self.password = password
-        self.engine = create_engine(f'postgresql://{self.username}:{self.password}@{self.host}:{self.port}/{self.db_name}?sslmode=require')
-        self.metadata = MetaData()
-        self.table_name = table_name
-        self.Base = declarative_base()
-        self.TableClass = self.create_table_class()        
-        self.Session = scoped_session(sessionmaker(bind=self.engine))
+    pass
+
+# class ArticleContentScraper():
+#     '''
+#     A flexible scraper to parse content from articles from any news outlet.
+#     Selectors are passed as tuples with three entries:
+#     The first entry is the XPATH selector to select the element/s.
+#     The second entry is a boolean - true to parse multiple elements for the same XPATH selector.
+#     The third entriy is a lambda function to parse the content, i.e.: lambda response: [x.get_attribute('href) for x in response]
+#     :param str scraping_mode: Determines how links should be parsed from the site. Options: 'RSS', 'FRONTEND' or 'API'
+#     :param dict selenium_settings: Determines what kind of driver and how it is started. Default: mode=uc, headed=True, proxy=None
+#     :param (str, boolean, func) datetime_published_selector: The date and time of publication
+#     :param (str, boolean, func) image_url_selector: The url of the main article image
+#     :param (str, boolean, func) category_selector: The category of the article
+#     :param (str, boolean, func) kicker_selector: The kicker/topline of the article
+#     :param (str, boolean, func) headline_selector: The headline of the article
+#     :param (str, boolean, func) teaser_selector: The teaser of the article
+#     :param (str, boolean, func) body_selector: The body of the article
+#     :param (str, boolean, func) subheadlines_selector: The subheadlines of the article
+#     :param (str, boolean, func) paywall_selector: A HTML element that's present if the article is paywalled
+#     :param (str, boolean, func) author_selector: The author/s of the article
+#     :param [func] pre_hooks: One or more functions to run before parsing content, i.e. to close a modal
+#     :param [func] post_hooks: One or more functions to parse additional data that is not included in all news outlets
+#     '''
+#     def __init__(
+#         self,
+#         scraping_mode,
+#         selenium_settings={
+#             'mode': 'uc',
+#             'headed': True,
+#             'proxy': None
+#         },
+#         link_list=None,
+#         medium=None,
+#         db=None,
+#         pre_hooks=None,
+#         post_hooks=None,
+#         datetime_published_selector=None,
+#         image_url_selector=None,        
+#         category_selector=None,
+#         kicker_selector=None,
+#         headline_selector=None,
+#         teaser_selector=None,
+#         body_selector=None,
+#         subheadlines_selector=None,
+#         paywall_selector=None,
+#         author_selector=None
+#     ):
+#         self.scraping_mode = scraping_mode
+#         self.selenium_settings = selenium_settings
+#         self.link_list = link_list
+#         self.medium = medium
+#         self.diff_to_utc = self.set_utc_difference()
+#         self.db = db
+#         self.pre_hooks = pre_hooks
+#         self.post_hooks = post_hooks
+#         self.datetime_published_selector = datetime_published_selector
+#         self.image_url_selector = image_url_selector
+#         self.category_selector = category_selector
+#         self.kicker_selector = kicker_selector
+#         self.headline_selector = headline_selector
+#         self.teaser_selector = teaser_selector
+#         self.body_selector = body_selector
+#         self.subheadlines_selector = subheadlines_selector
+#         self.paywall_selector = paywall_selector
+#         self.author_selector = author_selector
 
     
-    def create_table_class(self):
-        '''
-        Creates an SQLAlchemy table using the Base class.
-        Uses the specified schema if table does not yet exist.
-        If it exists, it reads the table schema from the db.
-        '''
-        if not self.engine.dialect.has_table(self.engine.connect(), self.table_name):
-            class TableClass(self.Base):
-                __tablename__ = self.table_name
-                id = Column(Integer, primary_key=True)
-                medium = Column(String)
-                datetime_saved = Column(DateTime)
-                datetime_published = Column(DateTime)
-                url = Column(String)
-                image_url = Column(String)
-                category = Column(String)
-                headline = Column(String)
-                kicker = Column(String)
-                teaser = Column(String)
-                body = Column(String)
-                subheadlines = Column(String)
-                paywall = Column(Boolean)
-                author = Column(String)
-                archive_url = Column(String)
-            return TableClass
-        else:
-            class TableClass(self.Base):
-                __table__ = Table(self.table_name, self.metadata, autoload_with=self.engine)
-            return TableClass
+#     def set_utc_difference(self):
+#         '''
+#         Determines the difference to UTC time for central Europe.
+#         '''
+#         if datetime.datetime.now(ZoneInfo('Europe/Brussels')).dst() != datetime.timedelta(0):
+#             return 2
+#         else:
+#             return 1
+            
+
+#     def get_element_by_xpath(self, driver, xpath_selector, multiple=False, func=None):
+#         if xpath_selector != None:
+#             if multiple:
+#                 if func:
+#                     element = func(driver.find_elements(By.XPATH, xpath_selector))
+#                 else:
+#                     element = driver.find_elements(By.XPATH, xpath_selector)
+#             else:
+#                 if func:
+#                     element = func(driver.find_element(By.XPATH, xpath_selector))
+#                 else:
+#                     element = driver.find_element(By.XPATH, xpath_selector)
+#         else:
+#             element = None
+#         return element
 
 
-    def get_engine(self):
-        '''
-        Returns the engine
-        '''
-        return self.engine
+#     def scrape_article_rss(self):
+#         '''
+#         TODO
+#         '''
+#         pass
 
 
-    def create_table(self):
-        '''
-        Creates a table for articles in my article database if it does not exist yet.
-        '''
-        if not self.engine.dialect.has_table(self.engine.connect(), self.table_name):
-            self.Base.metadata.create_all(self.engine)
-            print(f'The following table has been created: {self.table_name}')
-        else:
-            print(f'Table for {self.table_name} already exists.')
+#     def scrape_article_api(self):
+#         '''
+#         TODO
+#         '''
+#         pass
 
 
-    def write_articles_to_db(self, articles):
-        '''
-        Takes a list of articles and writes them to the database.
-        '''
-        with self.Session() as session:
-            article_objects = [self.TableClass(**article) for article in articles]
-            session.bulk_save_objects(article_objects)
-            session.commit()
+#     def scrape_article_frontend(self, driver, link):
+#         '''
+#         Navigates to the given link and scrapes the data from the article page by selecting elements from the frontend.
+#         :param Driver driver: An instance of a selenium driver with the corresponding article page already opened
+#         :param str link: The archive link used to open the article page. Needed here to pass into the resulting article_data dict
+#         '''
+#         article_data = {}
+#         if self.pre_hooks:
+#             for hook in self.pre_hooks:
+#                 try:
+#                     hook(driver)
+#                 except Exception as e:
+#                     logging.error(f'Could not run pre_hook {hook}: {e}')
+#                     continue
+#         try:
+#             datetime_published = self.get_element_by_xpath(driver, self.datetime_published_selector[0], func=self.datetime_published_selector[2])
+#         except Exception as e:
+#             datetime_published = None
+#             logging.error(f'datetime_published could not be parsed: {e} ')
+#         try:
+#             paywall = self.get_element_by_xpath(driver, self.paywall_selector[0], multiple=self.paywall_selector[1], func=self.paywall_selector[2])
+#         except Exception as e:
+#             paywall = None
+#             logging.error(f'paywall could not be identified: {e}')
+#         try:
+#             author = self.get_element_by_xpath(driver, self.author_selector[0], func=self.author_selector[2])
+#         except Exception as e:
+#             author = None
+#             logging.error(f'author could not be parsed: {e} ')
+#         try:
+#             category = self.get_element_by_xpath(driver, self.category_selector[0], multiple=self.category_selector[1], func=self.category_selector[2])
+#         except Exception as e:
+#             category = None
+#             logging.error(f'category could not be parsed: {e} ')
+#         try:
+#             image_url = self.get_element_by_xpath(driver, self.image_url_selector[0], func=self.image_url_selector[2])
+#         except Exception as e:
+#             image_url = None
+#             logging.error(f'image_url could not be parsed: {e} ')
+#         try:
+#             kicker = self.get_element_by_xpath(driver, self.kicker_selector[0], multiple=self.kicker_selector[1], func=self.kicker_selector[2])
+#         except Exception as e:
+#             kicker = None
+#             logging.error(f'kicker could not be parsed: {e} ')
+#         try:
+#             headline = self.get_element_by_xpath(driver, self.headline_selector[0], func=self.headline_selector[2])
+#         except Exception as e:
+#             headline = None
+#             logging.error(f'headline could not be parsed: {e} ')
+#         try:
+#             teaser = self.get_element_by_xpath(driver, self.teaser_selector[0], multiple=self.teaser_selector[1], func=self.teaser_selector[2])
+#         except Exception as e:
+#             teaser = None
+#             logging.error(f'teaser could not be parsed: {e} ')
+#         try:
+#             body = self.get_element_by_xpath(driver, self.body_selector[0], multiple=self.body_selector[1], func=self.body_selector[2])
+#         except Exception as e:
+#             body = None
+#             logging.error(f'body could not be parsed: {e} ')
+#         try:
+#             subheadlines = self.get_element_by_xpath(driver, self.subheadlines_selector[0], multiple=self.subheadlines_selector[1], func=self.subheadlines_selector[2])
+#         except Exception as e:
+#             subheadlines = None
+#             logging.error(f'subheadlines could not be parsed: {e} ')
+#         article_data['medium'] = self.medium
+#         article_data['datetime_saved'] = datetime.datetime.utcnow()
+#         article_data['datetime_published'] = datetime_published
+#         article_data['paywall'] = paywall
+#         article_data['url'] = driver.current_url
+#         article_data['author'] = author
+#         article_data['category'] = category
+#         article_data['image_url'] = image_url
+#         article_data['kicker'] = kicker
+#         article_data['headline'] = headline
+#         article_data['teaser'] = teaser
+#         article_data['body'] = body
+#         article_data['subheadlines'] = subheadlines
+#         article_data['archive_url'] = link
+#         if self.post_hooks:
+#             for hook in self.post_hooks:
+#                 try:
+#                     hook(driver, article_data)
+#                 except Exception as e:
+#                     logging.error(f'Could not run post_hook {hook}: {e}')
+#                     continue
+#         return article_data
 
 
-    def read_from_db(self, entry_id=None):
-        '''
-        Reads an entry from the database.
-        If entry_id is specified, it returns a single entry.
-        Otherwise it returns all entries as a DataFrame.
-        :param int entry_id: The id to retrieve
-        '''
-        with self.Session() as session:
-            if entry_id:
-                result = session.query(self.TableClass).filter_by(id=entry_id).first()
-                return result
-            else: 
-                result = [x for x in session.query(self.TableClass).all()]
-                df = pd.DataFrame([x.__dict__ for x in result])
-                df.drop('_sa_instance_state', axis=1, inplace=True)
-                return df
+#     def run(self):
+#         '''
+#         Starts a run, creates a driver and returns the article data as a list of dicts.
+#         '''
+#         if self.link_list:
+#             logging.info('Combining wire mode and a proxy will always start a headed browser.')
+#             articles = []
+#             if self.scraping_mode == 'RSS':
+#                 pass # TODO
+#             elif self.scraping_mode == 'API':
+#                 pass # TODO
+#             elif self.scraping_mode == 'FRONTEND':
+#                 if self.selenium_settings['mode'] == 'uc':
+#                     try:
+#                         driver = Driver(uc=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+#                         driver.set_window_size(1920, 1080)
+#                         for link in self.link_list:
+#                             driver.uc_open_with_reconnect(link)
+#                             article_data = self.scrape_article_frontend(driver, link)
+#                             articles.append(article_data)
+#                             time.sleep(random.randint(1, 5))
+#                         driver.quit()
+#                         return articles
+#                     finally:
+#                         driver.quit()
+#                 else:
+#                     try:
+#                         driver = Driver(wire=True, headed=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+#                         driver.set_window_size(1920, 1080)
+#                         for link in self.link_list:
+#                             driver.get(link)
+#                             article_data = self.scrape_article_frontend(driver, link)
+#                             articles.append(article_data)
+#                             time.sleep(random.randint(1, 5))
+#                         driver.quit()
+#                         return articles
+#                     finally:
+#                         driver.quit()
+#             else:
+#                 raise ValueError('You need to specify a scraping method.')
+#         else:
+#             raise ValueError('link_list is empty')
 
 
-    def load_latest_n_article_urls(self, n):
-        '''
-        Loads the archive_url (link_list url) for the latest n articles saved to the db.
-        '''
-        with self.Session() as session:
-            return [x.archive_url for x in session.query(self.TableClass).order_by(self.TableClass.datetime_saved.desc()).limit(n)]
+
+# class ArticleDB():
+#     '''
+#     Connection to a table in my Postgres database for news articles.
+#     Provides functions to write new articles to the db,
+#     check for and remove duplicates, load the latest n articles, etc.
+#     '''
+#     def __init__(self, host, port, db_name, username, password, table_name):
+#         self.host = host
+#         self.port = port
+#         self.db_name = db_name
+#         self.username = username
+#         self.password = password
+#         self.engine = create_engine(f'postgresql://{self.username}:{self.password}@{self.host}:{self.port}/{self.db_name}?sslmode=require')
+#         self.metadata = MetaData()
+#         self.table_name = table_name
+#         self.Base = declarative_base()
+#         self.TableClass = self.create_table_class()        
+#         self.Session = scoped_session(sessionmaker(bind=self.engine))
+
+    
+#     def create_table_class(self):
+#         '''
+#         Creates an SQLAlchemy table using the Base class.
+#         Uses the specified schema if table does not yet exist.
+#         If it exists, it reads the table schema from the db.
+#         '''
+#         if not self.engine.dialect.has_table(self.engine.connect(), self.table_name):
+#             class TableClass(self.Base):
+#                 __tablename__ = self.table_name
+#                 id = Column(Integer, primary_key=True)
+#                 medium = Column(String)
+#                 datetime_saved = Column(DateTime)
+#                 datetime_published = Column(DateTime)
+#                 url = Column(String)
+#                 image_url = Column(String)
+#                 category = Column(String)
+#                 headline = Column(String)
+#                 kicker = Column(String)
+#                 teaser = Column(String)
+#                 body = Column(String)
+#                 subheadlines = Column(String)
+#                 paywall = Column(Boolean)
+#                 author = Column(String)
+#                 archive_url = Column(String)
+#             return TableClass
+#         else:
+#             class TableClass(self.Base):
+#                 __table__ = Table(self.table_name, self.metadata, autoload_with=self.engine)
+#             return TableClass
 
 
-    def check_for_duplicates(self):
-        '''
-        Checks for duplicates based on the archive_url.
-        Returns the duplicate rows.
-        '''
-        with self.Session() as session:
-            subquery = session.query(self.TableClass.archive_url).group_by(self.TableClass.archive_url).having(func.count() > 1).subquery()
-            query = session.query(self.TableClass).join(subquery, self.TableClass.archive_url == subquery.c.archive_url)
-            return [(x.id, x.datetime_saved, x.headline, x.archive_url) for x in query.all()]
+#     def get_engine(self):
+#         '''
+#         Returns the engine
+#         '''
+#         return self.engine
 
 
-    def remove_duplicates(self):
-        '''
-        Removes duplicates.
-        '''
-        duplicates = self.check_for_duplicates()
-        entries_to_remove = []
-        counter = collections.Counter([x[3] for x in duplicates])
-        for row in duplicates:
-            appearances = counter.get(row[3])
-            if row[3] not in [x[3] for x in entries_to_remove]:
-                entries_to_remove.append(row)
-            else:
-                if collections.Counter([x[3] for x in entries_to_remove]).get(row[3]) < appearances - 1:
-                    entries_to_remove.append(row)
-        with self.Session() as session:
-            session.query(self.TableClass).filter(self.TableClass.id.in_([x[0] for x in entries_to_remove])).delete(synchronize_session='fetch')
-            session.commit()
+#     def create_table(self):
+#         '''
+#         Creates a table for articles in my article database if it does not exist yet.
+#         '''
+#         if not self.engine.dialect.has_table(self.engine.connect(), self.table_name):
+#             self.Base.metadata.create_all(self.engine)
+#             print(f'The following table has been created: {self.table_name}')
+#         else:
+#             print(f'Table for {self.table_name} already exists.')
+
+
+#     def write_articles_to_db(self, articles):
+#         '''
+#         Takes a list of articles and writes them to the database.
+#         '''
+#         with self.Session() as session:
+#             article_objects = [self.TableClass(**article) for article in articles]
+#             session.bulk_save_objects(article_objects)
+#             session.commit()
+
+
+#     def read_from_db(self, entry_id=None):
+#         '''
+#         Reads an entry from the database.
+#         If entry_id is specified, it returns a single entry.
+#         Otherwise it returns all entries as a DataFrame.
+#         :param int entry_id: The id to retrieve
+#         '''
+#         with self.Session() as session:
+#             if entry_id:
+#                 result = session.query(self.TableClass).filter_by(id=entry_id).first()
+#                 return result
+#             else: 
+#                 result = [x for x in session.query(self.TableClass).all()]
+#                 df = pd.DataFrame([x.__dict__ for x in result])
+#                 df.drop('_sa_instance_state', axis=1, inplace=True)
+#                 return df
+
+
+#     def load_latest_n_article_urls(self, n):
+#         '''
+#         Loads the archive_url (link_list url) for the latest n articles saved to the db.
+#         '''
+#         with self.Session() as session:
+#             return [x.archive_url for x in session.query(self.TableClass).order_by(self.TableClass.datetime_saved.desc()).limit(n)]
+
+
+#     def check_for_duplicates(self):
+#         '''
+#         Checks for duplicates based on the archive_url.
+#         Returns the duplicate rows.
+#         '''
+#         with self.Session() as session:
+#             subquery = session.query(self.TableClass.archive_url).group_by(self.TableClass.archive_url).having(func.count() > 1).subquery()
+#             query = session.query(self.TableClass).join(subquery, self.TableClass.archive_url == subquery.c.archive_url)
+#             return [(x.id, x.datetime_saved, x.headline, x.archive_url) for x in query.all()]
+
+
+#     def remove_duplicates(self):
+#         '''
+#         Removes duplicates.
+#         '''
+#         duplicates = self.check_for_duplicates()
+#         entries_to_remove = []
+#         counter = collections.Counter([x[3] for x in duplicates])
+#         for row in duplicates:
+#             appearances = counter.get(row[3])
+#             if row[3] not in [x[3] for x in entries_to_remove]:
+#                 entries_to_remove.append(row)
+#             else:
+#                 if collections.Counter([x[3] for x in entries_to_remove]).get(row[3]) < appearances - 1:
+#                     entries_to_remove.append(row)
+#         with self.Session() as session:
+#             session.query(self.TableClass).filter(self.TableClass.id.in_([x[0] for x in entries_to_remove])).delete(synchronize_session='fetch')
+#             session.commit()
