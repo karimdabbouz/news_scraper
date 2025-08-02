@@ -3,10 +3,11 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 from selenium.webdriver.common.by import By
 from seleniumwire.utils import decode as decodesw
-import logging, time, json, random, datetime
+import logging, time, json, random, datetime, collections
 from sqlalchemy import create_engine, inspect, Table, MetaData, select, Column, Integer, String, DateTime, Boolean, func
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 from typing import List, Dict, Any, Optional
+import pandas as pd
 
 
 class ArticleLinkScraper():
