@@ -498,15 +498,18 @@ class ArticleContentScraper():
                 pass
             elif self.scraping_mode == 'FRONTEND':
                 for link in self.link_list:
+                    driver = None
                     try:
                         driver = self._initialize_driver()
                         article_data = self._scrape_article_frontend(driver, link)
                         articles.append(article_data)
                         time.sleep(random.randint(1, 5))
-                    except:
+                    except Exception as e:
+                        logging.error(f'Error scraping {link}: {e}')
                         continue
                     finally:
-                        driver.quit()
+                        if driver:
+                            driver.quit()
                 return articles
             else:
                 raise ValueError('You need to specify a scraping_mode')
