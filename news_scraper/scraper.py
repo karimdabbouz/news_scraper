@@ -227,6 +227,7 @@ class ArticleContentScraper():
     :param (str, boolean, func) teaser_selector: The teaser of the article
     :param (str, boolean, func) body_selector: The body of the article
     :param (str, boolean, func) subheadlines_selector: The subheadlines of the article
+    :param (str, boolean, func) body_structured_selector: The body of the article INCLUDING subheadlines (replaces subheadlines and body separation)
     :param (str, boolean, func) paywall_selector: A HTML element that's present if the article is paywalled
     :param (str, boolean, func) author_selector: The author/s of the article
     :param [func] pre_hooks: One or more functions to run before parsing content, i.e. to close a modal
@@ -253,6 +254,7 @@ class ArticleContentScraper():
         teaser_selector=None,
         body_selector=None,
         subheadlines_selector=None,
+        body_structured_selector=None,
         paywall_selector=None,
         author_selector=None
     ):
@@ -271,6 +273,7 @@ class ArticleContentScraper():
         self.headline_selector = headline_selector
         self.teaser_selector = teaser_selector
         self.body_selector = body_selector
+        self.body_structured_selector = body_structured_selector
         self.subheadlines_selector = subheadlines_selector
         self.paywall_selector = paywall_selector
         self.author_selector = author_selector
@@ -414,7 +417,7 @@ class ArticleContentScraper():
             paywall = None
             logging.error(f'paywall could not be identified: {e}')
         try:
-            author = self._get_element_by_xpath(driver, self.author_selector[0], func=self.author_selector[2])
+            author = self._get_element_by_xpath(driver, self.author_selector[0], multiple=self.author_selector[1], func=self.author_selector[2])
         except Exception as e:
             author = None
             logging.error(f'author could not be parsed: {e} ')
@@ -444,6 +447,11 @@ class ArticleContentScraper():
             teaser = None
             logging.error(f'teaser could not be parsed: {e} ')
         try:
+            body_structured = self._get_element_by_xpath(driver, self.body_structured_selector[0], multiple=self.body_structured_selector[1], func=self.body_structured_selector[2])
+        except Exception as e:
+            body_structured = None
+            logging.error(f'body_structured could not be parsed: {e}')
+        try:
             body = self._get_element_by_xpath(driver, self.body_selector[0], multiple=self.body_selector[1], func=self.body_selector[2])
         except Exception as e:
             body = None
@@ -466,6 +474,7 @@ class ArticleContentScraper():
         article_data['teaser'] = teaser
         article_data['body'] = body
         article_data['subheadlines'] = subheadlines
+        article_data['body_structured'] = body_structured
         article_data['archive_url'] = link
         if self.post_hooks:
             for hook in self.post_hooks:
@@ -488,15 +497,16 @@ class ArticleContentScraper():
             elif self.scraping_mode == 'API':
                 pass
             elif self.scraping_mode == 'FRONTEND':
-                driver = self._initialize_driver()
                 for link in self.link_list:
                     try:
+                        driver = self._initialize_driver()
                         article_data = self._scrape_article_frontend(driver, link)
                         articles.append(article_data)
                         time.sleep(random.randint(1, 5))
                     except:
                         continue
-                driver.quit()
+                    finally:
+                        driver.quit()
                 return articles
             else:
                 raise ValueError('You need to specify a scraping_mode')
