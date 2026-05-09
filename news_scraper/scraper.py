@@ -51,7 +51,9 @@ class ArticleLinkScraper():
                     raise Exception(f'Error initializing driver: {e}')
             else:
                 try:
-                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    # Keep headless semantics identical across uc and wire:
+                    # headed=True -> headless=False, headed=False -> headless=True.
+                    driver = Driver(wire=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                     driver.set_window_size(1920, 1080)
                     return driver
                 except Exception as e:
@@ -63,7 +65,7 @@ class ArticleLinkScraper():
                 raise Exception('UC mode is not supported for API scraping. Use UI or RSS mode instead.')
             else:
                 try:
-                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver = Driver(wire=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                     driver.set_window_size(1920, 1080)
                     return driver
                 except Exception as e:
@@ -78,7 +80,7 @@ class ArticleLinkScraper():
                     raise Exception(f'Error initializing driver: {e}')
             else:
                 try:
-                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver = Driver(wire=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                     driver.set_window_size(1920, 1080)
                     return driver
                 except Exception as e:
@@ -293,7 +295,9 @@ class ArticleContentScraper():
                     raise Exception(f'Error initializing driver: {e}')
             else:
                 try:
-                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    # Keep headless semantics identical across uc and wire:
+                    # headed=True -> headless=False, headed=False -> headless=True.
+                    driver = Driver(wire=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                     driver.set_window_size(1920, 1080)
                     return driver
                 except Exception as e:
@@ -305,7 +309,7 @@ class ArticleContentScraper():
                 raise Exception('UC mode is not supported for API scraping. Use UI or RSS mode instead.')
             else:
                 try:
-                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver = Driver(wire=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                     driver.set_window_size(1920, 1080)
                     return driver
                 except Exception as e:
@@ -320,7 +324,7 @@ class ArticleContentScraper():
                     raise Exception(f'Error initializing driver: {e}')
             else:
                 try:
-                    driver = Driver(wire=True, headless=self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
+                    driver = Driver(wire=True, headless=not self.selenium_settings['headed'], proxy=self.selenium_settings['proxy'])
                     driver.set_window_size(1920, 1080)
                     return driver
                 except Exception as e:
@@ -394,7 +398,12 @@ class ArticleContentScraper():
         :param str link: The archive link used to open the article page
         '''
         try:
-            driver.uc_open_with_reconnect(link)
+            # UC helpers are only available/meaningful in uc mode.
+            # For wire mode we intentionally use plain get().
+            if self.selenium_settings['mode'] == 'uc':
+                driver.uc_open_with_reconnect(link)
+            else:
+                driver.get(link)
         except Exception as e:
             self._log_event('error', f'Could not open link to article page: {e}')
             raise
